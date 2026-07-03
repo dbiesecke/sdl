@@ -18,7 +18,7 @@ use crate::downloaders::{Downloader, EpisodesRequest};
 use crate::extractors::{extract_video_url_with_extractor_from_url_unchecked, has_extractor_with_name_other_name};
 
 static URL_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"(?i)^https?://(?:www\.)?(?:(aniworld)\.to/anime/stream|(s)\.to/serie|(serienstream)\.to/serie)/([^/\s]+)(?:/(?:(?:staffel-([0-9][0-9]*)(?:/(?:episode-([1-9][0-9]*)/?)?)?)|(?:(filme)(?:/(?:film-([1-9][0-9]*)/?)?)?))?)?$"#)
+    Regex::new(r#"(?i)^https?://(?:www\.)?(?:(aniworld)\.to/anime/stream|(s|sx)\.to/serie|(serienstream)\.to/serie)/([^/\s]+)(?:/(?:(?:staffel-([0-9][0-9]*)(?:/(?:episode-([1-9][0-9]*)/?)?)?)|(?:(filme)(?:/(?:film-([1-9][0-9]*)/?)?)?))?)?$"#)
         .unwrap()
 });
 
@@ -52,7 +52,7 @@ impl InstantiatedDownloader for AniWorldSerienStream<'_> {
             .execute(
                 match self.parsed_url.site {
                     Site::AniWorld => r#"return document.querySelector(".series-title > h1 > span").innerText;"#,
-                    Site::SerienStreamShort | Site::SerienStreamLong => {
+                    Site::SerienStreamShort | Site::SerienStreamX | Site::SerienStreamLong => {
                         r#"return document.querySelector("h1.fw-bold").innerText;"#
                     }
                 },
@@ -73,7 +73,7 @@ impl InstantiatedDownloader for AniWorldSerienStream<'_> {
                 None
             }
             .flatten(),
-            Site::SerienStreamShort | Site::SerienStreamLong => {
+            Site::SerienStreamShort | Site::SerienStreamX | Site::SerienStreamLong => {
                 if let Ok(element) = self.driver.find(By::Css(".series-description .description-text")).await {
                     element.text().await.ok()
                 } else {
@@ -213,6 +213,8 @@ impl TryFrom<&str> for ParsedUrl {
             Site::AniWorld
         } else if site.eq_ignore_ascii_case("s") {
             Site::SerienStreamShort
+        } else if site.eq_ignore_ascii_case("sx") {
+            Site::SerienStreamX
         } else if site.eq_ignore_ascii_case("serienstream") {
             Site::SerienStreamLong
         } else {
@@ -269,7 +271,7 @@ impl ParsedUrl {
     fn season_zero_is_filme_url(&self) -> bool {
         match self.site {
             Site::AniWorld => true,
-            Site::SerienStreamShort | Site::SerienStreamLong => false,
+            Site::SerienStreamShort | Site::SerienStreamX | Site::SerienStreamLong => false,
         }
     }
 }
@@ -278,6 +280,7 @@ impl ParsedUrl {
 enum Site {
     AniWorld,
     SerienStreamShort,
+    SerienStreamX,
     SerienStreamLong,
 }
 
@@ -286,6 +289,7 @@ impl Site {
         match self {
             Site::AniWorld => "https://aniworld.to/anime/stream",
             Site::SerienStreamShort => "https://s.to/serie",
+            Site::SerienStreamX => "https://sx.to/serie",
             Site::SerienStreamLong => "https://serienstream.to/serie",
         }
     }
@@ -457,7 +461,7 @@ impl<'driver, 'url, F: FnMut() -> Duration> Scraper<'driver, 'url, F> {
                     ),
                 ),
             ],
-            Site::SerienStreamShort | Site::SerienStreamLong => {
+            Site::SerienStreamShort | Site::SerienStreamX | Site::SerienStreamLong => {
                 [
                     (
                         VideoType::Dub(Language::German),
@@ -490,7 +494,7 @@ impl<'driver, 'url, F: FnMut() -> Duration> Scraper<'driver, 'url, F> {
                     _ => Ordering::Equal,
                 });
             }
-            Site::SerienStreamShort | Site::SerienStreamLong => {}
+            Site::SerienStreamShort | Site::SerienStreamX | Site::SerienStreamLong => {}
         }
 
         video_type.convert_to_non_unspecified_video_types_with_data(supported_video_types_and_selector)
@@ -511,7 +515,9 @@ impl<'driver, 'url, F: FnMut() -> Duration> Scraper<'driver, 'url, F> {
     async fn get_seasons_info(&self) -> Result<SeasonsInfo, anyhow::Error> {
         let seasons_selector = match self.parsed_url.site {
             Site::AniWorld => By::Css("#stream > ul:first-of-type > li"),
-            Site::SerienStreamShort | Site::SerienStreamLong => By::Css("#season-nav > ul > li > a"),
+            Site::SerienStreamShort | Site::SerienStreamX | Site::SerienStreamLong => {
+                By::Css("#season-nav > ul > li > a")
+            }
         };
         let seasons = self.driver.query(seasons_selector).all_from_selector().await.unwrap();
         let mut has_movies = false;
@@ -553,7 +559,7 @@ impl<'driver, 'url, F: FnMut() -> Duration> Scraper<'driver, 'url, F> {
     async fn get_episode_info(&self, current_season: u32, current_episode: u32) -> Option<EpisodeInfo> {
         let episode_title_selector = match self.parsed_url.site {
             Site::AniWorld => By::Css(".episodeGermanTitle"),
-            Site::SerienStreamShort | Site::SerienStreamLong => By::Css("article > h2"),
+            Site::SerienStreamShort | Site::SerienStreamX | Site::SerienStreamLong => By::Css("article > h2"),
         };
         let episode_title = if let Ok(element) = self.driver.find(episode_title_selector).await {
             element.text().await.ok().and_then(|title| {
@@ -571,7 +577,9 @@ impl<'driver, 'url, F: FnMut() -> Duration> Scraper<'driver, 'url, F> {
 
         let episodes_selector = match self.parsed_url.site {
             Site::AniWorld => By::Css("li > a[data-episode-id]"),
-            Site::SerienStreamShort | Site::SerienStreamLong => By::Css("#episode-nav > ul > li > a"),
+            Site::SerienStreamShort | Site::SerienStreamX | Site::SerienStreamLong => {
+                By::Css("#episode-nav > ul > li > a")
+            }
         };
         let episodes = self.driver.query(episodes_selector).all_from_selector().await.unwrap();
         let mut max_episode = None;
@@ -601,7 +609,7 @@ impl<'driver, 'url, F: FnMut() -> Duration> Scraper<'driver, 'url, F> {
     async fn get_language_key(&self, lang_element: &WebElement) -> Result<String, anyhow::Error> {
         let lang_key_attr = match self.parsed_url.site {
             Site::AniWorld => "data-lang-key",
-            Site::SerienStreamShort | Site::SerienStreamLong => "data-language-id",
+            Site::SerienStreamShort | Site::SerienStreamX | Site::SerienStreamLong => "data-language-id",
         };
         lang_element
             .attr(lang_key_attr)
@@ -617,7 +625,7 @@ impl<'driver, 'url, F: FnMut() -> Duration> Scraper<'driver, 'url, F> {
     ) -> Result<Vec<(String, url::Url)>, anyhow::Error> {
         let streams_selector = match self.parsed_url.site {
             Site::AniWorld => By::Css(&format!(r#".hosterSiteVideo ul li[data-lang-key="{}"]"#, lang_key)),
-            Site::SerienStreamShort | Site::SerienStreamLong => {
+            Site::SerienStreamShort | Site::SerienStreamX | Site::SerienStreamLong => {
                 By::Css(&format!(r#"button.link-box[data-language-id="{}"]"#, lang_key))
             }
         };
@@ -627,7 +635,7 @@ impl<'driver, 'url, F: FnMut() -> Duration> Scraper<'driver, 'url, F> {
         for stream in available_streams {
             let link_target_attr = match self.parsed_url.site {
                 Site::AniWorld => "data-link-target",
-                Site::SerienStreamShort | Site::SerienStreamLong => "data-play-url",
+                Site::SerienStreamShort | Site::SerienStreamX | Site::SerienStreamLong => "data-play-url",
             };
             let Some(link_target) = stream.attr(link_target_attr).await.unwrap() else {
                 log::trace!("Failed to find data-link-target");
@@ -653,7 +661,7 @@ impl<'driver, 'url, F: FnMut() -> Duration> Scraper<'driver, 'url, F> {
                     .context("failed to get name of stream platform as string")?
                     .trim()
                     .to_owned(),
-                Site::SerienStreamShort | Site::SerienStreamLong => stream
+                Site::SerienStreamShort | Site::SerienStreamX | Site::SerienStreamLong => stream
                     .attr("data-provider-name")
                     .await
                     .unwrap()
@@ -817,6 +825,8 @@ mod tests {
             "https://s.to/serie/detektiv-conan/staffel-0",
             "https://s.to/serie/detektiv-conan/staffel-5",
             "https://s.to/serie/detektiv-conan/staffel-1/episode-1",
+            "https://sx.to/serie/detektiv-conan",
+            "https://sx.to/serie/detektiv-conan/staffel-1/episode-1",
             "https://serienstream.to/serie/detektiv-conan",
             "https://serienstream.to/serie/detektiv-conan/staffel-0",
             "https://serienstream.to/serie/detektiv-conan/staffel-5",
@@ -867,8 +877,18 @@ mod tests {
             }),
         };
 
-        let url5 = "https://serienstream.to/serie/detektiv-conan/staffel-19/episode-20";
+        let url5 = "https://sx.to/serie/detektiv-conan/staffel-19/episode-20";
         let expected5 = ParsedUrl {
+            site: Site::SerienStreamX,
+            name: "detektiv-conan".to_string(),
+            season: Some(ParsedUrlSeason {
+                season: 19,
+                episode: Some(20),
+            }),
+        };
+
+        let url6 = "https://serienstream.to/serie/detektiv-conan/staffel-19/episode-20";
+        let expected6 = ParsedUrl {
             site: Site::SerienStreamLong,
             name: "detektiv-conan".to_string(),
             season: Some(ParsedUrlSeason {
@@ -877,8 +897,8 @@ mod tests {
             }),
         };
 
-        let url6 = "https://serienstream.to/serie/detektiv-conan/staffel-0/episode-3";
-        let expected6 = ParsedUrl {
+        let url7 = "https://serienstream.to/serie/detektiv-conan/staffel-0/episode-3";
+        let expected7 = ParsedUrl {
             site: Site::SerienStreamLong,
             name: "detektiv-conan".to_string(),
             season: Some(ParsedUrlSeason {
@@ -894,6 +914,7 @@ mod tests {
             (url4, expected4),
             (url5, expected5),
             (url6, expected6),
+            (url7, expected7),
         ];
 
         for (input, output) in tests {
