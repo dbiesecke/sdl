@@ -6,10 +6,50 @@ use std::time::Duration;
 use clap::ValueEnum;
 use enum_dispatch::enum_dispatch;
 use enum_iterator::Sequence;
+use serde::Serialize;
 use tokio::sync::mpsc::UnboundedSender;
 
 use self::aniworldserienstream::AniWorldSerienStream;
 use crate::extractors::ExtractedVideo;
+
+#[derive(Debug, Clone, Default)]
+pub struct InfoRequest {
+    pub resolve_streams: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SeriesCatalogInfo {
+    pub title: String,
+    pub description: Option<String>,
+    pub status: Option<String>,
+    pub year: Option<u32>,
+    pub seasons: Vec<SeasonCatalogInfo>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SeasonCatalogInfo {
+    pub season_number: u32,
+    pub episodes: Vec<EpisodeCatalogInfo>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct EpisodeCatalogInfo {
+    pub season_number: u32,
+    pub episode_number: u32,
+    pub episode_title: Option<String>,
+    pub languages: Vec<String>,
+    pub hosters: Vec<AvailableStreamInfo>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AvailableStreamInfo {
+    pub name: String,
+    pub language: String,
+    pub redirect_link: String,
+    pub resolved_url: Option<String>,
+    pub referer: Option<String>,
+    pub error: Option<String>,
+}
 
 pub mod aniworldserienstream;
 
@@ -328,6 +368,8 @@ pub enum EpisodeNumber {
 #[enum_dispatch]
 pub trait InstantiatedDownloader {
     async fn get_series_info(&self) -> Result<SeriesInfo, anyhow::Error>;
+
+    async fn get_catalog_info(&self, request: InfoRequest) -> Result<SeriesCatalogInfo, anyhow::Error>;
 
     async fn download<F: FnMut() -> Duration>(
         &self,
