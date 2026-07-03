@@ -13,12 +13,12 @@ pub async fn post_play(payload: web::Json<PlayJson>) -> Result<HttpResponse, Api
 }
 
 pub async fn get_info(query: web::Query<InfoRequest>) -> Result<HttpResponse, ApiError> {
-    let response = sdl_wrapper::info(query.into_inner().url).await?;
+    let response = sdl_wrapper::info(query.into_inner()).await?;
     Ok(HttpResponse::Ok().json(response))
 }
 
 pub async fn post_info(payload: web::Json<InfoRequest>) -> Result<HttpResponse, ApiError> {
-    let response = sdl_wrapper::info(payload.into_inner().url).await?;
+    let response = sdl_wrapper::info(payload.into_inner()).await?;
     Ok(HttpResponse::Ok().json(response))
 }
 
