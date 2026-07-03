@@ -4,7 +4,7 @@ Download multiple episodes from streaming sites
 ## Supported sites
 ### German
 * [AniWorld](https://aniworld.to)
-* [S.to](https://s.to)
+* [S.to](https://s.to) / [SX.to](https://sx.to)
 
 ## Supported extractors
 * Doodstream
@@ -121,6 +121,15 @@ Options:
   -V, --version
           Print version
 ```
+
+
+## Changelog
+
+### 2.5.0-dev
+* Added the HTTP API download endpoint `GET/POST /api/download`, which resolves supported URLs and returns the media response as a file attachment.
+* Added `GET/POST /api/info_resolve` to resolve generic redirect URLs such as `https://s.to/r?t=...`, `https://sx.to/r?t=...`, and `https://aniworld.to/redirect/...` before running extractors.
+* Added `/openapi.yaml` with an OpenAPI 3.1.1 description for ChatGPT Actions and other API clients.
+* Added `sx.to` as an accepted SerienStream host alias alongside `s.to` and `serienstream.to`.
 
 ## Notes
 If FFmpeg and ChromeDriver are not found in the `PATH`, they will be downloaded automatically.
