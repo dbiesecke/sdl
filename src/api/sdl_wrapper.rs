@@ -13,7 +13,7 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 use url::Url;
 
 use crate::api::error::ApiError;
-use crate::api::types::{InfoResponse, PlayRequest};
+use crate::api::types::{InfoRequest, InfoResponse, PlayRequest};
 use crate::downloaders::{
     self, AllOrSpecific, DownloadRequest, DownloadSettings, EpisodesRequest, ExtractorMatch, InstantiatedDownloader,
     Language, VideoType,
@@ -353,16 +353,62 @@ fn reject_multi_episode_requests(episodes: &EpisodesRequest) -> Result<(), ApiEr
     }
 }
 
-pub async fn info(url: String) -> Result<InfoResponse, ApiError> {
-    let url = validate_url(&url)?;
-    let supported = downloaders::exists_downloader_for_url(url.as_str()).await
-        || extractors::exists_extractor_for_url(url.as_str(), None).await;
+pub async fn info(request: InfoRequest) -> Result<InfoResponse, ApiError> {
+    let url = validate_url(&request.url)?;
+    if downloaders::exists_downloader_for_url(url.as_str()).await {
+        let catalog = tokio::time::timeout(SCRAPE_TIMEOUT, async {
+            let data_dir = dirs::get_data_dir().await?;
+            let limiter = async_speed_limit::Limiter::new(f64::INFINITY);
+            let asset_downloader = {
+                let mut log_wrapper = api_log_wrapper()?;
+                download::Downloader::new(
+                    log_wrapper.as_mut().expect("api log wrapper initialized"),
+                    limiter,
+                    false,
+                    None,
+                    None,
+                    None,
+                )
+            };
+            let (driver, mut child) = chrome::ChromeDriver::get(&data_dir, &asset_downloader, true).await?;
+            let result = async {
+                let downloader = downloaders::find_downloader_for_url(&driver, false, url.as_str())
+                    .await
+                    .context("no downloader supports the supplied url")?;
+                downloader
+                    .get_catalog_info(downloaders::InfoRequest {
+                        resolve_streams: request.resolve_streams,
+                    })
+                    .await
+            }
+            .await;
+            let _ = driver.quit().await;
+            let _ = child.kill();
+            result
+        })
+        .await
+        .map_err(|_| ApiError::BadRequest("series info scraping timed out".to_owned()))?
+        .map_err(ApiError::Internal)?;
+
+        return Ok(InfoResponse {
+            supported: true,
+            downloader: Some("auto".to_owned()),
+            title: Some(catalog.title.clone()),
+            description: catalog.description.clone(),
+            status: catalog.status.clone(),
+            year: catalog.year,
+            catalog: Some(catalog),
+        });
+    }
+
+    let supported = extractors::exists_extractor_for_url(url.as_str(), None).await;
     Ok(InfoResponse {
         supported,
-        downloader: supported.then_some("auto".to_owned()),
+        downloader: supported.then_some("extractor".to_owned()),
         title: None,
         description: None,
         status: None,
         year: None,
+        catalog: None,
     })
 }

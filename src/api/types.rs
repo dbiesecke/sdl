@@ -1,3 +1,4 @@
+use crate::downloaders::SeriesCatalogInfo;
 use serde::{Deserialize, Serialize};
 
 /// Request payload/query for `/api/play`.
@@ -36,6 +37,8 @@ pub struct PlayResponse {
 #[derive(Debug, Clone, Deserialize)]
 pub struct InfoRequest {
     pub url: String,
+    #[serde(default)]
+    pub resolve_streams: bool,
 }
 
 /// Response payload for `/api/info`.
@@ -47,6 +50,7 @@ pub struct InfoResponse {
     pub description: Option<String>,
     pub status: Option<String>,
     pub year: Option<u32>,
+    pub catalog: Option<SeriesCatalogInfo>,
 }
 
 #[derive(Debug, Clone, Serialize)]
