@@ -1,0 +1,305 @@
+openapi: 3.1.1
+info:
+  title: SDL API
+  version: 2.5.0-dev
+  description: Stream, download, inspect, and resolve supported SDL video links.
+servers:
+  - url: http://localhost:8080
+paths:
+  /health:
+    get:
+      operationId: health
+      summary: API health and route list
+      responses:
+        '200':
+          description: Healthy API response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+  /api/play:
+    get:
+      operationId: playFromQuery
+      summary: Stream a playable video inline
+      parameters:
+        - $ref: '#/components/parameters/Url'
+        - $ref: '#/components/parameters/Language'
+        - $ref: '#/components/parameters/VideoType'
+        - $ref: '#/components/parameters/Episodes'
+        - $ref: '#/components/parameters/Seasons'
+        - $ref: '#/components/parameters/Extractor'
+        - $ref: '#/components/parameters/UserAgent'
+        - $ref: '#/components/parameters/Referer'
+      responses:
+        '200':
+          description: Video stream
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+            video/mp4:
+              schema:
+                type: string
+                format: binary
+    post:
+      operationId: play
+      summary: Stream a playable video inline
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlayRequest'
+      responses:
+        '200':
+          description: Video stream
+  /api/download:
+    get:
+      operationId: downloadFromQuery
+      summary: Download a resolved video as an attachment
+      parameters:
+        - $ref: '#/components/parameters/Url'
+        - $ref: '#/components/parameters/Language'
+        - $ref: '#/components/parameters/VideoType'
+        - $ref: '#/components/parameters/Episodes'
+        - $ref: '#/components/parameters/Seasons'
+        - $ref: '#/components/parameters/Extractor'
+        - $ref: '#/components/parameters/UserAgent'
+        - $ref: '#/components/parameters/Referer'
+      responses:
+        '200':
+          description: Downloadable video response
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+            video/mp4:
+              schema:
+                type: string
+                format: binary
+    post:
+      operationId: download
+      summary: Download a resolved video as an attachment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlayRequest'
+      responses:
+        '200':
+          description: Downloadable video response
+  /api/info:
+    get:
+      operationId: infoFromQuery
+      summary: Get metadata for a supported URL
+      parameters:
+        - $ref: '#/components/parameters/Url'
+        - name: resolve_streams
+          in: query
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: Metadata response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InfoResponse'
+    post:
+      operationId: info
+      summary: Get metadata for a supported URL
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InfoRequest'
+      responses:
+        '200':
+          description: Metadata response
+  /api/info_resolve:
+    get:
+      operationId: infoResolveFromQuery
+      summary: Resolve generic redirect links to their real extractor source
+      parameters:
+        - $ref: '#/components/parameters/Url'
+        - $ref: '#/components/parameters/Extractor'
+        - $ref: '#/components/parameters/UserAgent'
+        - $ref: '#/components/parameters/Referer'
+      responses:
+        '200':
+          description: Resolved link information
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InfoResolveResponse'
+    post:
+      operationId: infoResolve
+      summary: Resolve generic redirect links to their real extractor source
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InfoResolveRequest'
+      responses:
+        '200':
+          description: Resolved link information
+  /openapi.yaml:
+    get:
+      operationId: openapiYaml
+      summary: OpenAPI description
+      responses:
+        '200':
+          description: OpenAPI YAML document
+          content:
+            application/yaml:
+              schema:
+                type: string
+components:
+  parameters:
+    Url:
+      name: url
+      in: query
+      required: true
+      schema:
+        type: string
+        format: uri
+    Language:
+      name: language
+      in: query
+      schema:
+        type: string
+        enum: [unspecified, any, german, english]
+    VideoType:
+      name: video_type
+      in: query
+      schema:
+        type: string
+        enum: [unspecified, any, raw, dub, sub]
+    Episodes:
+      name: episodes
+      in: query
+      schema:
+        type: string
+        description: Single episode, comma/range list, or all.
+    Seasons:
+      name: seasons
+      in: query
+      schema:
+        type: string
+        description: Single season, comma/range list, or all.
+    Extractor:
+      name: extractor
+      in: query
+      schema:
+        type: string
+    UserAgent:
+      name: user_agent
+      in: query
+      schema:
+        type: string
+    Referer:
+      name: referer
+      in: query
+      schema:
+        type: string
+        format: uri
+  schemas:
+    PlayRequest:
+      type: object
+      required: [url]
+      properties:
+        url:
+          type: string
+          format: uri
+        language:
+          type: string
+        video_type:
+          type: string
+        episodes:
+          type: string
+        seasons:
+          type: string
+        extractor_priorities:
+          type: array
+          items:
+            type: string
+        extractor:
+          type: string
+        user_agent:
+          type: string
+        referer:
+          type: string
+          format: uri
+    InfoRequest:
+      type: object
+      required: [url]
+      properties:
+        url:
+          type: string
+          format: uri
+        resolve_streams:
+          type: boolean
+          default: false
+    InfoResolveRequest:
+      type: object
+      required: [url]
+      properties:
+        url:
+          type: string
+          format: uri
+        extractor:
+          type: string
+        user_agent:
+          type: string
+        referer:
+          type: string
+          format: uri
+    InfoResolveResponse:
+      type: object
+      properties:
+        supported:
+          type: boolean
+        input_url:
+          type: string
+        resolved_page_url:
+          type: [string, 'null']
+        video_url:
+          type: [string, 'null']
+        referer:
+          type: [string, 'null']
+        extractor:
+          type: [string, 'null']
+        error:
+          type: [string, 'null']
+    InfoResponse:
+      type: object
+      properties:
+        supported:
+          type: boolean
+        downloader:
+          type: [string, 'null']
+        title:
+          type: [string, 'null']
+        description:
+          type: [string, 'null']
+        status:
+          type: [string, 'null']
+        year:
+          type: [integer, 'null']
+        catalog:
+          type: [object, 'null']
+    HealthResponse:
+      type: object
+      properties:
+        name:
+          type: string
+        routes:
+          type: array
+          items:
+            type: string

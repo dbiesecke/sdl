@@ -1,6 +1,6 @@
 [package]
 name = "sdl"
-version = "0.2.1"
+version = "2.5.0-dev"
 edition = "2021"
 rust-version = "1.75"
 readme = "README.md"

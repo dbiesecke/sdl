@@ -13,7 +13,7 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 use url::Url;
 
 use crate::api::error::ApiError;
-use crate::api::types::{ApiState, InfoRequest, InfoResponse, PlayRequest};
+use crate::api::types::{ApiState, InfoRequest, InfoResolveRequest, InfoResolveResponse, InfoResponse, PlayRequest};
 use crate::downloaders::{
     self, AllOrSpecific, DownloadRequest, DownloadSettings, EpisodesRequest, ExtractorMatch, InstantiatedDownloader,
     Language, VideoType,
@@ -31,17 +31,39 @@ static API_LOG_WRAPPER: Lazy<Mutex<Option<SetLogWrapper>>> = Lazy::new(|| Mutex:
 pub async fn play(state: ApiState, request: PlayRequest) -> Result<HttpResponse, ApiError> {
     let permit = acquire_stream_permit(&state).await?;
     let url = validate_url(&request.url)?;
-    let extracted = if extractors::exists_extractor_for_url(url.as_str(), request.extractor.as_deref()).await {
-        extract_direct_video(url.as_str(), &request).await?
-    } else if downloaders::exists_downloader_for_url(url.as_str()).await {
-        extract_series_video(state.clone(), url.as_str(), request.clone()).await?
-    } else {
-        return Err(ApiError::UnsupportedUrl(
-            "no downloader or extractor supports the supplied url".to_owned(),
-        ));
-    };
+    let extracted = resolve_playable_video(state.clone(), url.as_str(), request).await?;
+    stream_extracted_video(state.client.clone(), extracted.url, extracted.referer, permit, false).await
+}
 
-    stream_extracted_video(state.client.clone(), extracted.url, extracted.referer, permit).await
+pub async fn download(state: ApiState, request: PlayRequest) -> Result<HttpResponse, ApiError> {
+    let permit = acquire_stream_permit(&state).await?;
+    let url = validate_url(&request.url)?;
+    let extracted = resolve_playable_video(state.clone(), url.as_str(), request).await?;
+    stream_extracted_video(state.client.clone(), extracted.url, extracted.referer, permit, true).await
+}
+
+async fn resolve_playable_video(
+    state: ApiState,
+    url: &str,
+    request: PlayRequest,
+) -> Result<extractors::ExtractedVideo, ApiError> {
+    if extractors::exists_extractor_for_url(url, request.extractor.as_deref()).await {
+        extract_direct_video(url, &request).await
+    } else if downloaders::exists_downloader_for_url(url).await {
+        extract_series_video(state, url, request).await
+    } else if let Some(resolved_url) = resolve_generic_link(&state.client, url).await? {
+        if extractors::exists_extractor_for_url(resolved_url.as_str(), request.extractor.as_deref()).await {
+            extract_direct_video(resolved_url.as_str(), &request).await
+        } else {
+            Err(ApiError::UnsupportedUrl(
+                "generic link did not resolve to a supported extractor url".to_owned(),
+            ))
+        }
+    } else {
+        Err(ApiError::UnsupportedUrl(
+            "no downloader or extractor supports the supplied url".to_owned(),
+        ))
+    }
 }
 
 async fn acquire_stream_permit(state: &ApiState) -> Result<OwnedSemaphorePermit, ApiError> {
@@ -146,13 +168,14 @@ async fn stream_extracted_video(
     video_url: String,
     referer: Option<String>,
     permit: OwnedSemaphorePermit,
+    download: bool,
 ) -> Result<HttpResponse, ApiError> {
     let parsed = Url::parse(&video_url).map_err(|err| {
         log::warn!("Extractor returned an invalid video url: {err:#}");
         ApiError::ExtractorFailed("extractor returned an invalid video url".to_owned())
     })?;
     if parsed.path().to_ascii_lowercase().ends_with(".m3u8") {
-        return Ok(stream_m3u8(client, parsed, referer, permit).await?);
+        return Ok(stream_m3u8(client, parsed, referer, permit, download).await?);
     }
 
     let mut req = client.get(parsed.clone());
@@ -172,7 +195,7 @@ async fn stream_extracted_video(
         .unwrap_or("")
         .to_owned();
     if content_type.contains("mpegurl") || content_type.contains("application/vnd.apple.mpegurl") {
-        return Ok(stream_m3u8(client, parsed, referer, permit).await?);
+        return Ok(stream_m3u8(client, parsed, referer, permit, download).await?);
     }
     let header_type = if parsed.path().to_ascii_lowercase().ends_with(".mp4") || content_type.contains("video/mp4") {
         "video/mp4"
@@ -183,7 +206,7 @@ async fn stream_extracted_video(
         let _permit = &permit;
         item.map_err(actix_web::error::ErrorBadGateway)
     });
-    Ok(base_stream_response(header_type).streaming(stream))
+    Ok(base_stream_response(header_type, download).streaming(stream))
 }
 
 async fn stream_m3u8(
@@ -191,6 +214,7 @@ async fn stream_m3u8(
     playlist_url: Url,
     referer: Option<String>,
     permit: OwnedSemaphorePermit,
+    download: bool,
 ) -> Result<HttpResponse, ApiError> {
     let mut current_playlist_url = playlist_url;
     let segment_urls = loop {
@@ -256,7 +280,7 @@ async fn stream_m3u8(
             Ok::<Bytes, actix_web::Error>(bytes)
         }
     });
-    Ok(base_stream_response("application/octet-stream").streaming(stream))
+    Ok(base_stream_response("application/octet-stream", download).streaming(stream))
 }
 
 fn map_upstream_error(err: reqwest::Error) -> ApiError {
@@ -268,10 +292,15 @@ fn map_upstream_error(err: reqwest::Error) -> ApiError {
     }
 }
 
-fn base_stream_response(content_type: &'static str) -> actix_web::HttpResponseBuilder {
+fn base_stream_response(content_type: &'static str, download: bool) -> actix_web::HttpResponseBuilder {
     let mut builder = HttpResponse::Ok();
     builder.insert_header((CONTENT_TYPE, content_type));
-    builder.insert_header((CONTENT_DISPOSITION, "inline; filename=\"sdl-stream\""));
+    let disposition = if download {
+        "attachment; filename=\"sdl-download\""
+    } else {
+        "inline; filename=\"sdl-stream\""
+    };
+    builder.insert_header((CONTENT_DISPOSITION, disposition));
     builder
 }
 
@@ -392,6 +421,100 @@ fn reject_multi_episode_requests(episodes: &EpisodesRequest) -> Result<(), ApiEr
             ))
         }
         _ => Ok(()),
+    }
+}
+
+const MAX_GENERIC_REDIRECT_HOPS: usize = 8;
+
+fn is_generic_redirect_link(url: &Url) -> bool {
+    let Some(host) = url.host_str().map(|host| host.to_ascii_lowercase()) else {
+        return false;
+    };
+    matches!(
+        host.as_str(),
+        "s.to" | "sx.to" | "aniworld.to" | "www.s.to" | "www.sx.to" | "www.aniworld.to"
+    ) && (url.path().starts_with("/r") || url.path().starts_with("/redirect"))
+}
+
+fn parse_script_redirect(body: &str, base_url: &Url) -> Option<String> {
+    let marker = r#"window.location.replace(""#;
+    let start = body.find(marker)? + marker.len();
+    let rest = &body[start..];
+    let end = rest.find(r#"")"#)?;
+    let escaped = &rest[..end];
+    let unescaped = escaped.replace(r#"\/"#, "/");
+    base_url.join(&unescaped).ok().map(|url| url.to_string())
+}
+
+async fn resolve_generic_link(client: &reqwest::Client, url: &str) -> Result<Option<String>, ApiError> {
+    let mut current = Url::parse(url).map_err(|_| ApiError::BadRequest("invalid url".to_owned()))?;
+    if !is_generic_redirect_link(&current) {
+        return Ok(None);
+    }
+
+    for _ in 0..MAX_GENERIC_REDIRECT_HOPS {
+        let response = client.get(current.clone()).send().await.map_err(map_upstream_error)?;
+        let response_url = response.url().clone();
+        let body = response.text().await.map_err(map_upstream_error).unwrap_or_default();
+        let next = parse_script_redirect(&body, &response_url).unwrap_or_else(|| response_url.to_string());
+        let next_url = Url::parse(&next).map_err(|_| ApiError::BadRequest("invalid resolved url".to_owned()))?;
+
+        if next_url == current {
+            return Ok(Some(next_url.to_string()));
+        }
+        if !is_generic_redirect_link(&next_url) {
+            return Ok(Some(next_url.to_string()));
+        }
+        current = next_url;
+    }
+
+    Err(ApiError::ExtractorFailed(
+        "too many generic redirect hops while resolving url".to_owned(),
+    ))
+}
+
+pub async fn info_resolve(state: ApiState, request: InfoResolveRequest) -> Result<InfoResolveResponse, ApiError> {
+    let input_url = validate_url(&request.url)?.to_string();
+    let page_url = resolve_generic_link(&state.client, &input_url)
+        .await?
+        .unwrap_or_else(|| input_url.clone());
+    let extraction = if extractors::exists_extractor_for_url(&page_url, request.extractor.as_deref()).await {
+        let play_request = PlayRequest {
+            url: page_url.clone(),
+            language: None,
+            video_type: None,
+            episodes: None,
+            seasons: None,
+            extractor_priorities: None,
+            extractor: request.extractor.clone(),
+            user_agent: request.user_agent.clone(),
+            referer: request.referer.clone().or_else(|| Some(input_url.clone())),
+        };
+        extract_direct_video(&page_url, &play_request).await
+    } else {
+        Err(ApiError::UnsupportedUrl(
+            "resolved url is not supported by any extractor".to_owned(),
+        ))
+    };
+    match extraction {
+        Ok(video) => Ok(InfoResolveResponse {
+            supported: true,
+            input_url,
+            resolved_page_url: Some(page_url),
+            video_url: Some(video.url),
+            referer: video.referer,
+            extractor: request.extractor,
+            error: None,
+        }),
+        Err(err) => Ok(InfoResolveResponse {
+            supported: false,
+            input_url,
+            resolved_page_url: Some(page_url),
+            video_url: None,
+            referer: None,
+            extractor: request.extractor,
+            error: Some(err.to_string()),
+        }),
     }
 }
 
