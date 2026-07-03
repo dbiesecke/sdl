@@ -51,10 +51,18 @@ log = "0.4"
 env_logger = "0.10"
 chrono = "0.4"
 anyhow = "1.0"
+actix-web = "4"
+async-stream = "0.3"
+serde = { version = "1.0", features = ["derive"] }
+thiserror = "1.0"
 
 [[bin]]
 name = "sdl"
 path = "src/main.rs"
+
+[[bin]]
+name = "sdl-api"
+path = "src/bin/sdl-api.rs"
 
 [lib]
 name = "sdl"
