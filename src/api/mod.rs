@@ -6,6 +6,7 @@
 //! `AniWorldSerienStream::get_series_info`, and `extractors::extract_video_url*`,
 //! keeping API hoster support aligned with the CLI.
 
+pub mod browser;
 pub mod error;
 pub mod handlers;
 pub mod routes;

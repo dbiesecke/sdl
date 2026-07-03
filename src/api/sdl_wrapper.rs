@@ -18,8 +18,8 @@ use crate::downloaders::{
     self, AllOrSpecific, DownloadRequest, DownloadSettings, EpisodesRequest, ExtractorMatch, InstantiatedDownloader,
     Language, VideoType,
 };
+use crate::extractors;
 use crate::logger::log_wrapper::{LogWrapper, SetLogWrapper};
-use crate::{chrome, dirs, download, extractors};
 use once_cell::sync::Lazy;
 use std::sync::Mutex;
 
@@ -34,7 +34,7 @@ pub async fn play(state: ApiState, request: PlayRequest) -> Result<HttpResponse,
     let extracted = if extractors::exists_extractor_for_url(url.as_str(), request.extractor.as_deref()).await {
         extract_direct_video(url.as_str(), &request).await?
     } else if downloaders::exists_downloader_for_url(url.as_str()).await {
-        extract_series_video(url.as_str(), request.clone()).await?
+        extract_series_video(state.clone(), url.as_str(), request.clone()).await?
     } else {
         return Err(ApiError::UnsupportedUrl(
             "no downloader or extractor supports the supplied url".to_owned(),
@@ -86,49 +86,41 @@ async fn extract_direct_video(url: &str, request: &PlayRequest) -> Result<extrac
     }
 }
 
-async fn extract_series_video(url: &str, request: PlayRequest) -> Result<extractors::ExtractedVideo, ApiError> {
+async fn extract_series_video(
+    state: ApiState,
+    url: &str,
+    request: PlayRequest,
+) -> Result<extractors::ExtractedVideo, ApiError> {
     let download_request = build_download_request(&request)?;
     reject_multi_episode_requests(&download_request.episodes)?;
+    let url = url.to_owned();
 
     tokio::time::timeout(SCRAPE_TIMEOUT, async move {
-        let data_dir = dirs::get_data_dir().await?;
-        let limiter = async_speed_limit::Limiter::new(f64::INFINITY);
-        let asset_downloader = {
-            let mut log_wrapper = api_log_wrapper()?;
-            download::Downloader::new(
-                log_wrapper.as_mut().expect("api log wrapper initialized"),
-                limiter,
-                false,
-                None,
-                None,
-                None,
-            )
-        };
-        let (driver, mut child) = chrome::ChromeDriver::get(&data_dir, &asset_downloader, true).await?;
-        let result = async {
-            let downloader = downloaders::find_downloader_for_url(&driver, false, url)
-                .await
-                .context("no downloader supports the supplied url")?;
-            let (tx, rx) = mpsc::unbounded_channel();
-            let settings = DownloadSettings::new(None, || Duration::ZERO);
-            let download_future = downloader.download(download_request, settings, tx);
-            tokio::pin!(download_future);
-            let mut rx = UnboundedReceiverStream::new(rx);
-            tokio::select! {
-                task = rx.next() => {
-                    let task = task.context("downloader did not produce a streamable episode")?;
-                    Ok(extractors::ExtractedVideo { url: task.download_url, referer: task.referer })
-                }
-                result = &mut download_future => {
-                    result?;
-                    anyhow::bail!("downloader completed without producing a streamable episode")
-                }
-            }
-        }
-        .await;
-        let _ = driver.quit().await;
-        let _ = child.kill();
-        result
+        state
+            .browser
+            .with_driver(|driver| {
+                Box::pin(async move {
+                    let downloader = downloaders::find_downloader_for_url(driver, false, &url)
+                        .await
+                        .context("no downloader supports the supplied url")?;
+                    let (tx, rx) = mpsc::unbounded_channel();
+                    let settings = DownloadSettings::new(None, || Duration::ZERO);
+                    let download_future = downloader.download(download_request, settings, tx);
+                    tokio::pin!(download_future);
+                    let mut rx = UnboundedReceiverStream::new(rx);
+                    tokio::select! {
+                        task = rx.next() => {
+                            let task = task.context("downloader did not produce a streamable episode")?;
+                            Ok(extractors::ExtractedVideo { url: task.download_url, referer: task.referer })
+                        }
+                        result = &mut download_future => {
+                            result?;
+                            anyhow::bail!("downloader completed without producing a streamable episode")
+                        }
+                    }
+                })
+            })
+            .await
     })
     .await
     .map_err(|_| ApiError::Timeout("series scraping timed out".to_owned()))?
@@ -138,7 +130,7 @@ async fn extract_series_video(url: &str, request: PlayRequest) -> Result<extract
     })
 }
 
-fn api_log_wrapper() -> Result<std::sync::MutexGuard<'static, Option<SetLogWrapper>>, anyhow::Error> {
+pub(crate) fn api_log_wrapper() -> Result<std::sync::MutexGuard<'static, Option<SetLogWrapper>>, anyhow::Error> {
     let mut guard = API_LOG_WRAPPER
         .lock()
         .map_err(|_| anyhow::anyhow!("api logger lock poisoned"))?;
@@ -403,38 +395,25 @@ fn reject_multi_episode_requests(episodes: &EpisodesRequest) -> Result<(), ApiEr
     }
 }
 
-pub async fn info(request: InfoRequest) -> Result<InfoResponse, ApiError> {
+pub async fn info(state: ApiState, request: InfoRequest) -> Result<InfoResponse, ApiError> {
     let url = validate_url(&request.url)?;
     if downloaders::exists_downloader_for_url(url.as_str()).await {
         let catalog = tokio::time::timeout(SCRAPE_TIMEOUT, async {
-            let data_dir = dirs::get_data_dir().await?;
-            let limiter = async_speed_limit::Limiter::new(f64::INFINITY);
-            let asset_downloader = {
-                let mut log_wrapper = api_log_wrapper()?;
-                download::Downloader::new(
-                    log_wrapper.as_mut().expect("api log wrapper initialized"),
-                    limiter,
-                    false,
-                    None,
-                    None,
-                    None,
-                )
-            };
-            let (driver, mut child) = chrome::ChromeDriver::get(&data_dir, &asset_downloader, true).await?;
-            let result = async {
-                let downloader = downloaders::find_downloader_for_url(&driver, false, url.as_str())
-                    .await
-                    .context("no downloader supports the supplied url")?;
-                downloader
-                    .get_catalog_info(downloaders::InfoRequest {
-                        resolve_streams: request.resolve_streams,
+            state
+                .browser
+                .with_driver(|driver| {
+                    Box::pin(async move {
+                        let downloader = downloaders::find_downloader_for_url(driver, false, url.as_str())
+                            .await
+                            .context("no downloader supports the supplied url")?;
+                        downloader
+                            .get_catalog_info(downloaders::InfoRequest {
+                                resolve_streams: request.resolve_streams,
+                            })
+                            .await
                     })
-                    .await
-            }
-            .await;
-            let _ = driver.quit().await;
-            let _ = child.kill();
-            result
+                })
+                .await
         })
         .await
         .map_err(|_| ApiError::Timeout("series info scraping timed out".to_owned()))?

@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use actix_web::{web, App, HttpServer};
+use sdl::api::browser::ApiBrowser;
 use sdl::api::types::ApiState;
 
 const DEFAULT_MAX_STREAMS: usize = 4;
@@ -22,14 +23,20 @@ async fn main() -> std::io::Result<()> {
     let state = ApiState {
         download_semaphore: Arc::new(tokio::sync::Semaphore::new(max_streams)),
         client,
+        browser: Arc::new(ApiBrowser::new()),
     };
 
-    HttpServer::new(move || {
+    let browser = state.browser.clone();
+
+    let server = HttpServer::new(move || {
         App::new()
             .app_data(web::Data::new(state.clone()))
             .configure(sdl::api::routes::configure)
     })
     .bind(bind_address)?
-    .run()
-    .await
+    .run();
+
+    let result = server.await;
+    browser.shutdown().await;
+    result
 }

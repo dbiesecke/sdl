@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::api::browser::ApiBrowser;
 use crate::downloaders::SeriesCatalogInfo;
 use serde::{Deserialize, Serialize};
 
@@ -33,6 +34,7 @@ pub type PlayJson = PlayRequest;
 pub struct ApiState {
     pub download_semaphore: Arc<tokio::sync::Semaphore>,
     pub client: reqwest::Client,
+    pub browser: Arc<ApiBrowser>,
 }
 
 /// Response payload for `/api/play` metadata endpoints or tests.
