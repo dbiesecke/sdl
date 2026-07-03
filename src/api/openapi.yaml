@@ -1,7 +1,7 @@
 openapi: 3.1.1
 info:
   title: SDL API
-  version: 2.5.0-dev
+  version: 0.5.0-dev
   description: Stream, download, inspect, and resolve supported SDL video links.
 servers:
   - url: http://localhost:8080
@@ -20,7 +20,7 @@ paths:
   /api/play:
     get:
       operationId: playFromQuery
-      summary: Stream a playable video inline
+      summary: Stream a playable video inline from a series, extractor, or redirect link
       parameters:
         - $ref: '#/components/parameters/Url'
         - $ref: '#/components/parameters/Language'
@@ -44,7 +44,7 @@ paths:
                 format: binary
     post:
       operationId: play
-      summary: Stream a playable video inline
+      summary: Stream a playable video inline from a series, extractor, or redirect link
       requestBody:
         required: true
         content:
@@ -57,7 +57,7 @@ paths:
   /api/download:
     get:
       operationId: downloadFromQuery
-      summary: Download a resolved video as an attachment
+      summary: Download a resolved video as an attachment from a series, extractor, or redirect link
       parameters:
         - $ref: '#/components/parameters/Url'
         - $ref: '#/components/parameters/Language'
@@ -81,7 +81,7 @@ paths:
                 format: binary
     post:
       operationId: download
-      summary: Download a resolved video as an attachment
+      summary: Download a resolved video as an attachment from a series, extractor, or redirect link
       requestBody:
         required: true
         content:
@@ -94,7 +94,7 @@ paths:
   /api/info:
     get:
       operationId: infoFromQuery
-      summary: Get metadata for a supported URL
+      summary: Get metadata/support details for a series, extractor, or redirect URL
       parameters:
         - $ref: '#/components/parameters/Url'
         - name: resolve_streams
@@ -111,7 +111,7 @@ paths:
                 $ref: '#/components/schemas/InfoResponse'
     post:
       operationId: info
-      summary: Get metadata for a supported URL
+      summary: Get metadata/support details for a series, extractor, or redirect URL
       requestBody:
         required: true
         content:
@@ -124,7 +124,7 @@ paths:
   /api/info_resolve:
     get:
       operationId: infoResolveFromQuery
-      summary: Resolve generic redirect links to their real extractor source
+      summary: Resolve extractor or redirect links to their playable video source
       parameters:
         - $ref: '#/components/parameters/Url'
         - $ref: '#/components/parameters/Extractor'
@@ -139,7 +139,7 @@ paths:
                 $ref: '#/components/schemas/InfoResolveResponse'
     post:
       operationId: infoResolve
-      summary: Resolve generic redirect links to their real extractor source
+      summary: Resolve extractor or redirect links to their playable video source
       requestBody:
         required: true
         content:

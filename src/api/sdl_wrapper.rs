@@ -49,16 +49,17 @@ async fn resolve_playable_video(
 ) -> Result<extractors::ExtractedVideo, ApiError> {
     if extractors::exists_extractor_for_url(url, request.extractor.as_deref()).await {
         extract_direct_video(url, &request).await
-    } else if downloaders::exists_downloader_for_url(url).await {
-        extract_series_video(state, url, request).await
     } else if let Some(resolved_url) = resolve_generic_link(&state.client, url).await? {
         if extractors::exists_extractor_for_url(resolved_url.as_str(), request.extractor.as_deref()).await {
+            let request = request_with_default_referer(request, url);
             extract_direct_video(resolved_url.as_str(), &request).await
         } else {
             Err(ApiError::UnsupportedUrl(
                 "generic link did not resolve to a supported extractor url".to_owned(),
             ))
         }
+    } else if downloaders::exists_downloader_for_url(url).await {
+        extract_series_video(state, url, request).await
     } else {
         Err(ApiError::UnsupportedUrl(
             "no downloader or extractor supports the supplied url".to_owned(),
@@ -77,6 +78,13 @@ async fn acquire_stream_permit(state: &ApiState) -> Result<OwnedSemaphorePermit,
         .await
         .map_err(|_| ApiError::ServiceUnavailable("too many concurrent streams".to_owned()))?
         .map_err(|_| ApiError::ServiceUnavailable("stream limiter is unavailable".to_owned()))
+}
+
+fn request_with_default_referer(mut request: PlayRequest, referer: &str) -> PlayRequest {
+    if request.referer.is_none() {
+        request.referer = Some(referer.to_owned());
+    }
+    request
 }
 
 async fn extract_direct_video(url: &str, request: &PlayRequest) -> Result<extractors::ExtractedVideo, ApiError> {
@@ -424,53 +432,23 @@ fn reject_multi_episode_requests(episodes: &EpisodesRequest) -> Result<(), ApiEr
     }
 }
 
-const MAX_GENERIC_REDIRECT_HOPS: usize = 8;
+async fn resolve_generic_link(client: &reqwest::Client, url: &str) -> Result<Option<String>, ApiError> {
+    let parsed = Url::parse(url).map_err(|_| ApiError::BadRequest("invalid url".to_owned()))?;
+    if !is_generic_extractor_redirect(&parsed) {
+        return Ok(None);
+    }
+    let response = client.get(parsed).send().await.map_err(map_upstream_error)?;
+    Ok(Some(response.url().as_str().to_owned()))
+}
 
-fn is_generic_redirect_link(url: &Url) -> bool {
+fn is_generic_extractor_redirect(url: &Url) -> bool {
     let Some(host) = url.host_str().map(|host| host.to_ascii_lowercase()) else {
         return false;
     };
     matches!(
         host.as_str(),
         "s.to" | "sx.to" | "aniworld.to" | "www.s.to" | "www.sx.to" | "www.aniworld.to"
-    ) && (url.path().starts_with("/r") || url.path().starts_with("/redirect"))
-}
-
-fn parse_script_redirect(body: &str, base_url: &Url) -> Option<String> {
-    let marker = r#"window.location.replace(""#;
-    let start = body.find(marker)? + marker.len();
-    let rest = &body[start..];
-    let end = rest.find(r#"")"#)?;
-    let escaped = &rest[..end];
-    let unescaped = escaped.replace(r#"\/"#, "/");
-    base_url.join(&unescaped).ok().map(|url| url.to_string())
-}
-
-async fn resolve_generic_link(client: &reqwest::Client, url: &str) -> Result<Option<String>, ApiError> {
-    let mut current = Url::parse(url).map_err(|_| ApiError::BadRequest("invalid url".to_owned()))?;
-    if !is_generic_redirect_link(&current) {
-        return Ok(None);
-    }
-
-    for _ in 0..MAX_GENERIC_REDIRECT_HOPS {
-        let response = client.get(current.clone()).send().await.map_err(map_upstream_error)?;
-        let response_url = response.url().clone();
-        let body = response.text().await.map_err(map_upstream_error).unwrap_or_default();
-        let next = parse_script_redirect(&body, &response_url).unwrap_or_else(|| response_url.to_string());
-        let next_url = Url::parse(&next).map_err(|_| ApiError::BadRequest("invalid resolved url".to_owned()))?;
-
-        if next_url == current {
-            return Ok(Some(next_url.to_string()));
-        }
-        if !is_generic_redirect_link(&next_url) {
-            return Ok(Some(next_url.to_string()));
-        }
-        current = next_url;
-    }
-
-    Err(ApiError::ExtractorFailed(
-        "too many generic redirect hops while resolving url".to_owned(),
-    ))
+    ) && (url.path() == "/r" || url.path().starts_with("/r/") || url.path().starts_with("/redirect"))
 }
 
 pub async fn info_resolve(state: ApiState, request: InfoResolveRequest) -> Result<InfoResolveResponse, ApiError> {
@@ -520,6 +498,19 @@ pub async fn info_resolve(state: ApiState, request: InfoResolveRequest) -> Resul
 
 pub async fn info(state: ApiState, request: InfoRequest) -> Result<InfoResponse, ApiError> {
     let url = validate_url(&request.url)?;
+    if let Some(resolved_url) = resolve_generic_link(&state.client, url.as_str()).await? {
+        let supported = extractors::exists_extractor_for_url(&resolved_url, None).await;
+        return Ok(InfoResponse {
+            supported,
+            downloader: supported.then_some("extractor".to_owned()),
+            title: None,
+            description: None,
+            status: None,
+            year: None,
+            catalog: None,
+        });
+    }
+
     if downloaders::exists_downloader_for_url(url.as_str()).await {
         let catalog = tokio::time::timeout(SCRAPE_TIMEOUT, async {
             state
@@ -566,4 +557,34 @@ pub async fn info(state: ApiState, request: InfoRequest) -> Result<InfoResponse,
         year: None,
         catalog: None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detects_supported_generic_extractor_redirects() {
+        for raw_url in [
+            "https://s.to/r?t=abc",
+            "https://s.to/r/abc",
+            "https://aniworld.to/redirect/abc",
+            "https://www.sx.to/r?t=abc",
+        ] {
+            let url = Url::parse(raw_url).unwrap();
+            assert!(is_generic_extractor_redirect(&url), "{raw_url} should be generic");
+        }
+    }
+
+    #[test]
+    fn ignores_series_urls_and_unrelated_hosts() {
+        for raw_url in [
+            "https://s.to/serie/stream/demo/staffel-1/episode-1",
+            "https://vidmoly.net/embed-siisgm81oh6c.html",
+            "https://example.com/r?t=abc",
+        ] {
+            let url = Url::parse(raw_url).unwrap();
+            assert!(!is_generic_extractor_redirect(&url), "{raw_url} should not be generic");
+        }
+    }
 }
