@@ -17,7 +17,9 @@ use crate::downloaders::{Downloader, EpisodesRequest};
 use crate::extractors::{extract_video_url_with_extractor_from_url_unchecked, has_extractor_with_name_other_name};
 
 static URL_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r#"(?i)^https?://(?:www\.)?(?:(aniworld)\.to/anime/stream|(s)\.to/serie|(serienstream)\.to/serie)/([^/\s]+)(?:/(?:(?:staffel-([0-9][0-9]*)(?:/(?:episode-([1-9][0-9]*)/?)?)?)|(?:(filme)(?:/(?:film-([1-9][0-9]*)/?)?)?))?)?$"#)
+//    Regex::new(r#"(?i)^https?://(?:www\.)?(?:(aniworld)\.to/anime|(s)\.to/serie|(serienstream)\.to/serie)/stream/([^/\s]+)(?:/(?:(?:staffel-([1-9][0-9]*)(?:/(?:episode-([1-9][0-9]*)/?)?)?)|(?:(filme)(?:/(?:film-([1-9][0-9]*)/?)?)?))?)?$"#)
+//    Regex::new(r#"(?i)^https?://(?:www\.)?(?:(aniworld)\.to/anime|(s)\.to/serie|(serienstream)\.to/serie)/stream/([^/\s]+)(?:/(?:(?:staffel-([1-9][0-9]*)(?:/(?:episode-([1-9][0-9]*)/?)?)?)|(?:(filme)(?:/(?:film-([1-9][0-9]*)/?)?)?))?)?$"#)
+   Regex::new(r#"(?i)^https?://(?:www\.)?(?:(?:aniworld\.to/anime|s\.to/serie|serienstream\.to/serie)/stream/[^/\s]+(?:/(?:staffel-[1-9][0-9]*(?:/episode-[1-9][0-9]*/?)?|filme(?:/film-[1-9][0-9]*/?)?))?|s\.to/r\?[^/\s]+)$"#)
         .unwrap()
 });
 
@@ -208,8 +210,8 @@ impl Site {
     fn get_base_url(&self) -> &'static str {
         match self {
             Site::AniWorld => "https://aniworld.to/anime/stream",
-            Site::SerienStreamShort => "https://s.to/serie",
-            Site::SerienStreamLong => "https://serienstream.to/serie",
+            Site::SerienStreamShort => "https://s.to/serie/stream",
+            Site::SerienStreamLong => "https://serienstream.to/serie/stream",
         }
     }
 }
@@ -672,14 +674,14 @@ mod tests {
             "https://aniworld.to/anime/stream/mushoku-tensei-jobless-reincarnation/filme",
             "https://aniworld.to/anime/stream/detektiv-conan/staffel-18/episode-2",
             "http://www.aniworld.to/anime/stream/mushoku-tensei-jobless-reincarnation/filme",
-            "https://s.to/serie/detektiv-conan",
-            "https://s.to/serie/detektiv-conan/staffel-0",
-            "https://s.to/serie/detektiv-conan/staffel-5",
-            "https://s.to/serie/detektiv-conan/staffel-1/episode-1",
-            "https://serienstream.to/serie/detektiv-conan",
-            "https://serienstream.to/serie/detektiv-conan/staffel-0",
-            "https://serienstream.to/serie/detektiv-conan/staffel-5",
-            "https://serienstream.to/serie/detektiv-conan/staffel-1/episode-1",
+            "https://s.to/serie/stream/detektiv-conan",
+            "https://s.to/serie/stream/detektiv-conan/filme",
+            "https://s.to/serie/stream/detektiv-conan/staffel-5",
+            "https://s.to/serie/stream/detektiv-conan/staffel-1/episode-1",
+            "https://serienstream.to/serie/stream/detektiv-conan",
+            "https://serienstream.to/serie/stream/detektiv-conan/filme",
+            "https://serienstream.to/serie/stream/detektiv-conan/staffel-5",
+            "https://serienstream.to/serie/stream/detektiv-conan/staffel-1/episode-1",
         ];
 
         for url in is_supported {
@@ -736,7 +738,7 @@ mod tests {
             }),
         };
 
-        let url6 = "https://serienstream.to/serie/detektiv-conan/staffel-0/episode-3";
+        let url6 = "https://serienstream.to/serie/stream/detektiv-conan/filme/film-3";
         let expected6 = ParsedUrl {
             site: Site::SerienStreamLong,
             name: "detektiv-conan".to_string(),
