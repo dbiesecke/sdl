@@ -1,9 +1,19 @@
 use serde::{Deserialize, Serialize};
 
-/// Request payload for `/api/play`.
+/// Request payload/query for `/api/play`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct PlayRequest {
     pub url: String,
+    #[serde(default)]
+    pub language: Option<String>,
+    #[serde(default)]
+    pub video_type: Option<String>,
+    #[serde(default)]
+    pub episodes: Option<String>,
+    #[serde(default)]
+    pub seasons: Option<String>,
+    #[serde(default)]
+    pub extractor_priorities: Option<Vec<String>>,
     #[serde(default)]
     pub extractor: Option<String>,
     #[serde(default)]
@@ -12,7 +22,10 @@ pub struct PlayRequest {
     pub referer: Option<String>,
 }
 
-/// Response payload for `/api/play`.
+pub type PlayQuery = PlayRequest;
+pub type PlayJson = PlayRequest;
+
+/// Response payload for `/api/play` metadata endpoints or tests.
 #[derive(Debug, Clone, Serialize)]
 pub struct PlayResponse {
     pub url: String,

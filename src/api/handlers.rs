@@ -2,16 +2,14 @@ use actix_web::{web, HttpResponse};
 
 use crate::api::error::ApiError;
 use crate::api::sdl_wrapper;
-use crate::api::types::{HealthResponse, InfoRequest, PlayRequest};
+use crate::api::types::{HealthResponse, InfoRequest, PlayJson, PlayQuery};
 
-pub async fn get_play(query: web::Query<PlayRequest>) -> Result<HttpResponse, ApiError> {
-    let response = sdl_wrapper::play(query.into_inner()).await?;
-    Ok(HttpResponse::Ok().json(response))
+pub async fn get_play(query: web::Query<PlayQuery>) -> Result<HttpResponse, ApiError> {
+    sdl_wrapper::play(query.into_inner()).await
 }
 
-pub async fn post_play(payload: web::Json<PlayRequest>) -> Result<HttpResponse, ApiError> {
-    let response = sdl_wrapper::play(payload.into_inner()).await?;
-    Ok(HttpResponse::Ok().json(response))
+pub async fn post_play(payload: web::Json<PlayJson>) -> Result<HttpResponse, ApiError> {
+    sdl_wrapper::play(payload.into_inner()).await
 }
 
 pub async fn get_info(query: web::Query<InfoRequest>) -> Result<HttpResponse, ApiError> {
