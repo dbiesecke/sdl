@@ -36,7 +36,7 @@ pub async fn play(state: ApiState, request: PlayRequest) -> Result<HttpResponse,
     } else if downloaders::exists_downloader_for_url(url.as_str()).await {
         extract_series_video(url.as_str(), request.clone()).await?
     } else {
-        return Err(ApiError::NotFound(
+        return Err(ApiError::UnsupportedUrl(
             "no downloader or extractor supports the supplied url".to_owned(),
         ));
     };
@@ -54,7 +54,7 @@ async fn acquire_stream_permit(state: &ApiState) -> Result<OwnedSemaphorePermit,
     tokio::time::timeout(timeout, state.download_semaphore.clone().acquire_owned())
         .await
         .map_err(|_| ApiError::ServiceUnavailable("too many concurrent streams".to_owned()))?
-        .map_err(|_| ApiError::ServiceUnavailable("stream limiter is closed".to_owned()))
+        .map_err(|_| ApiError::ServiceUnavailable("stream limiter is unavailable".to_owned()))
 }
 
 async fn extract_direct_video(url: &str, request: &PlayRequest) -> Result<extractors::ExtractedVideo, ApiError> {
@@ -71,11 +71,18 @@ async fn extract_direct_video(url: &str, request: &PlayRequest) -> Result<extrac
 
     match tokio::time::timeout(SCRAPE_TIMEOUT, extraction)
         .await
-        .map_err(|_| ApiError::BadRequest("video extraction timed out".to_owned()))?
+        .map_err(|_| ApiError::Timeout("video extraction timed out".to_owned()))?
     {
         Some(Ok(video)) => Ok(video),
-        Some(Err(err)) => Err(ApiError::Internal(err)),
-        None => Err(ApiError::NotFound("no extractor supports the supplied url".to_owned())),
+        Some(Err(err)) => {
+            log::warn!("Video extractor failed: {err:#}");
+            Err(ApiError::ExtractorFailed(
+                "failed to extract video from the supplied url".to_owned(),
+            ))
+        }
+        None => Err(ApiError::UnsupportedUrl(
+            "no extractor supports the supplied url".to_owned(),
+        )),
     }
 }
 
@@ -124,8 +131,11 @@ async fn extract_series_video(url: &str, request: PlayRequest) -> Result<extract
         result
     })
     .await
-    .map_err(|_| ApiError::BadRequest("series scraping timed out".to_owned()))?
-    .map_err(ApiError::Internal)
+    .map_err(|_| ApiError::Timeout("series scraping timed out".to_owned()))?
+    .map_err(|err| {
+        log::warn!("Series extractor failed: {err:#}");
+        ApiError::ExtractorFailed("failed to scrape a streamable episode from the supplied url".to_owned())
+    })
 }
 
 fn api_log_wrapper() -> Result<std::sync::MutexGuard<'static, Option<SetLogWrapper>>, anyhow::Error> {
@@ -145,7 +155,10 @@ async fn stream_extracted_video(
     referer: Option<String>,
     permit: OwnedSemaphorePermit,
 ) -> Result<HttpResponse, ApiError> {
-    let parsed = Url::parse(&video_url).context("extracted video url is invalid")?;
+    let parsed = Url::parse(&video_url).map_err(|err| {
+        log::warn!("Extractor returned an invalid video url: {err:#}");
+        ApiError::ExtractorFailed("extractor returned an invalid video url".to_owned())
+    })?;
     if parsed.path().to_ascii_lowercase().ends_with(".m3u8") {
         return Ok(stream_m3u8(client, parsed, referer, permit).await?);
     }
@@ -157,9 +170,9 @@ async fn stream_extracted_video(
     let response = req
         .send()
         .await
-        .map_err(anyhow::Error::from)?
+        .map_err(map_upstream_error)?
         .error_for_status()
-        .map_err(anyhow::Error::from)?;
+        .map_err(map_upstream_error)?;
     let content_type = response
         .headers()
         .get(reqwest::header::CONTENT_TYPE)
@@ -196,14 +209,16 @@ async fn stream_m3u8(
         let body = req
             .send()
             .await
-            .map_err(anyhow::Error::from)?
+            .map_err(map_upstream_error)?
             .error_for_status()
-            .map_err(anyhow::Error::from)?
+            .map_err(map_upstream_error)?
             .bytes()
             .await
-            .map_err(anyhow::Error::from)?;
-        let playlist =
-            m3u8_rs::parse_playlist_res(&body).map_err(|e| anyhow::anyhow!("failed to parse m3u8 playlist: {e:?}"))?;
+            .map_err(map_upstream_error)?;
+        let playlist = m3u8_rs::parse_playlist_res(&body).map_err(|err| {
+            log::warn!("Failed to parse upstream m3u8 playlist: {err:?}");
+            ApiError::UpstreamFailed("failed to parse upstream playlist".to_owned())
+        })?;
         match playlist {
             m3u8_rs::Playlist::MediaPlaylist(media) => {
                 break media
@@ -211,14 +226,20 @@ async fn stream_m3u8(
                     .into_iter()
                     .map(|s| current_playlist_url.join(&s.uri))
                     .collect::<Result<Vec<_>, _>>()
-                    .map_err(anyhow::Error::from)?;
+                    .map_err(|err| {
+                        log::warn!("Failed to resolve m3u8 segment url: {err:#}");
+                        ApiError::UpstreamFailed("failed to resolve upstream playlist segment".to_owned())
+                    })?;
             }
             m3u8_rs::Playlist::MasterPlaylist(master) => {
-                let variant = master
-                    .variants
-                    .first()
-                    .context("m3u8 master playlist has no variants")?;
-                current_playlist_url = current_playlist_url.join(&variant.uri).map_err(anyhow::Error::from)?;
+                let variant = master.variants.first().ok_or_else(|| {
+                    log::warn!("Upstream m3u8 master playlist has no variants");
+                    ApiError::UpstreamFailed("upstream playlist has no variants".to_owned())
+                })?;
+                current_playlist_url = current_playlist_url.join(&variant.uri).map_err(|err| {
+                    log::warn!("Failed to resolve m3u8 variant url: {err:#}");
+                    ApiError::UpstreamFailed("failed to resolve upstream playlist variant".to_owned())
+                })?;
             }
         }
     };
@@ -246,6 +267,15 @@ async fn stream_m3u8(
     Ok(base_stream_response("application/octet-stream").streaming(stream))
 }
 
+fn map_upstream_error(err: reqwest::Error) -> ApiError {
+    log::warn!("Upstream request failed: {err:#}");
+    if err.is_timeout() {
+        ApiError::Timeout("upstream request timed out".to_owned())
+    } else {
+        ApiError::UpstreamFailed("upstream request failed".to_owned())
+    }
+}
+
 fn base_stream_response(content_type: &'static str) -> actix_web::HttpResponseBuilder {
     let mut builder = HttpResponse::Ok();
     builder.insert_header((CONTENT_TYPE, content_type));
@@ -257,7 +287,7 @@ fn validate_url(raw: &str) -> Result<Url, ApiError> {
     if raw.trim().is_empty() {
         return Err(ApiError::BadRequest("url must not be empty".to_owned()));
     }
-    let url = Url::parse(raw).map_err(|err| ApiError::BadRequest(format!("invalid url: {err}")))?;
+    let url = Url::parse(raw).map_err(|_| ApiError::BadRequest("invalid url".to_owned()))?;
     match url.scheme() {
         "http" | "https" => Ok(url),
         _ => Err(ApiError::BadRequest("url must use http or https".to_owned())),
@@ -407,8 +437,11 @@ pub async fn info(request: InfoRequest) -> Result<InfoResponse, ApiError> {
             result
         })
         .await
-        .map_err(|_| ApiError::BadRequest("series info scraping timed out".to_owned()))?
-        .map_err(ApiError::Internal)?;
+        .map_err(|_| ApiError::Timeout("series info scraping timed out".to_owned()))?
+        .map_err(|err| {
+            log::warn!("Series info scraping failed: {err:#}");
+            ApiError::ExtractorFailed("failed to scrape series info from the supplied url".to_owned())
+        })?;
 
         return Ok(InfoResponse {
             supported: true,
