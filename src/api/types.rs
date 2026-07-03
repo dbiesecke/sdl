@@ -29,6 +29,11 @@ pub struct PlayRequest {
 pub type PlayQuery = PlayRequest;
 pub type PlayJson = PlayRequest;
 
+/// Request payload/query for `/api/download`.
+pub type DownloadRequest = PlayRequest;
+pub type DownloadQuery = DownloadRequest;
+pub type DownloadJson = DownloadRequest;
+
 /// Shared state for API handlers.
 #[derive(Debug, Clone)]
 pub struct ApiState {
@@ -50,6 +55,29 @@ pub struct InfoRequest {
     pub url: String,
     #[serde(default)]
     pub resolve_streams: bool,
+}
+
+/// Request payload/query for `/api/info_resolve`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct InfoResolveRequest {
+    pub url: String,
+    #[serde(default)]
+    pub extractor: Option<String>,
+    #[serde(default)]
+    pub user_agent: Option<String>,
+    #[serde(default)]
+    pub referer: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct InfoResolveResponse {
+    pub supported: bool,
+    pub input_url: String,
+    pub resolved_page_url: Option<String>,
+    pub video_url: Option<String>,
+    pub referer: Option<String>,
+    pub extractor: Option<String>,
+    pub error: Option<String>,
 }
 
 /// Response payload for `/api/info`.
