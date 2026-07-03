@@ -21,15 +21,15 @@ jobs:
         platform: [ubuntu-22.04, macos-latest, windows-latest]
         include:
           - platform: ubuntu-22.04
-            artifact-path: ./target/release/sdl
+            artifact-path: ./target/release/sdl-api
             artifact-platform-name: linux-x64
             env-command: ">> $GITHUB_ENV"
           - platform: macos-latest
-            artifact-path: ./target/release/sdl
+            artifact-path: ./target/release/sdl-api
             artifact-platform-name: macos-aarch64
             env-command: ">> $GITHUB_ENV"
           - platform: windows-latest
-            artifact-path: ./target/release/sdl.exe
+            artifact-path: ./target/release/sdl-api.exe
             artifact-platform-name: windows-x64
             env-command: "| Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append"
 
@@ -60,7 +60,7 @@ jobs:
 
       - name: Build, get version
         run: |
-          cargo run --release --bin sdl -- --help
+          cargo run --release --bin sdl-api -- --help
           echo "SDL_VERSION=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages | .[0].version')" ${{ matrix.env-command }}
 
       - name: Archive (Windows)
@@ -71,7 +71,7 @@ jobs:
       - name: Archive (Unix)
         if: ${{ matrix.platform != 'windows-latest' }}
         run: |
-          gzip -c ${{ matrix.artifact-path }} > sdl-${{ env.SDL_VERSION }}-${{ matrix.artifact-platform-name }}.gz
+          gzip -c ${{ matrix.artifact-path }} > sdl-api-${{ env.SDL_VERSION }}-${{ matrix.artifact-platform-name }}.gz
 
       - name: Build (linux-armv7-gnueabihf)
         if: ${{ matrix.platform == 'ubuntu-22.04' }}
@@ -81,8 +81,8 @@ jobs:
           export CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=/usr/bin/arm-linux-gnueabihf-gcc
           export ARMV7_UNKNOWN_LINUX_GNUEABIHF_OPENSSL_LIB_DIR=/usr/lib/arm-linux-gnueabihf
           export ARMV7_UNKNOWN_LINUX_GNUEABIHF_OPENSSL_INCLUDE_DIR=/usr/include/arm-linux-gnueabihf
-          cargo build --release --bin sdl --target armv7-unknown-linux-gnueabihf
-          gzip -c ./target/armv7-unknown-linux-gnueabihf/release/sdl > sdl-${{ env.SDL_VERSION }}-linux-armv7-gnueabihf.gz
+          cargo build --release --bin sdl-api --target armv7-unknown-linux-gnueabihf
+          gzip -c ./target/armv7-unknown-linux-gnueabihf/release/sdl-api > sdl-${{ env.SDL_VERSION }}-linux-armv7-gnueabihf.gz
 
       - name: Build (linux-aarch64-gnu)
         if: ${{ matrix.platform == 'ubuntu-22.04' }}
@@ -92,14 +92,14 @@ jobs:
           export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=/usr/bin/aarch64-linux-gnu-gcc
           export AARCH64_UNKNOWN_LINUX_GNU_OPENSSL_LIB_DIR=/usr/lib/aarch64-linux-gnu
           export AARCH64_UNKNOWN_LINUX_GNU_OPENSSL_INCLUDE_DIR=/usr/include/aarch64-linux-gnu
-          cargo build --release --bin sdl --target aarch64-unknown-linux-gnu
-          gzip -c ./target/aarch64-unknown-linux-gnu/release/sdl > sdl-${{ env.SDL_VERSION }}-linux-aarch64-gnu.gz
+          cargo build --release --bin sdl-api --target aarch64-unknown-linux-gnu
+          gzip -c ./target/aarch64-unknown-linux-gnu/release/sdl-api > sdl-${{ env.SDL_VERSION }}-linux-aarch64-gnu.gz
 
       - name: Upload artifacts
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            sdl-${{ env.SDL_VERSION }}-${{ matrix.artifact-platform-name }}.zip
-            sdl-${{ env.SDL_VERSION }}-${{ matrix.artifact-platform-name }}.gz
-            sdl-${{ env.SDL_VERSION }}-linux-armv7-gnueabihf.gz
-            sdl-${{ env.SDL_VERSION }}-linux-aarch64-gnu.gz
+            sdl-api-${{ env.SDL_VERSION }}-${{ matrix.artifact-platform-name }}.zip
+            sdl-api-${{ env.SDL_VERSION }}-${{ matrix.artifact-platform-name }}.gz
+            sdl-api-${{ env.SDL_VERSION }}-linux-armv7-gnueabihf.gz
+            sdl-api-${{ env.SDL_VERSION }}-linux-aarch64-gnu.gz
