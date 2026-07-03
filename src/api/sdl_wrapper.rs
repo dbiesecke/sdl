@@ -8,12 +8,12 @@ use actix_web::HttpResponse;
 use anyhow::Context;
 use bytes::Bytes;
 use futures_util::{StreamExt, TryStreamExt};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, OwnedSemaphorePermit};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use url::Url;
 
 use crate::api::error::ApiError;
-use crate::api::types::{InfoRequest, InfoResponse, PlayRequest};
+use crate::api::types::{ApiState, InfoRequest, InfoResponse, PlayRequest};
 use crate::downloaders::{
     self, AllOrSpecific, DownloadRequest, DownloadSettings, EpisodesRequest, ExtractorMatch, InstantiatedDownloader,
     Language, VideoType,
@@ -24,11 +24,12 @@ use once_cell::sync::Lazy;
 use std::sync::Mutex;
 
 const SCRAPE_TIMEOUT: Duration = Duration::from_secs(90);
-const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
+const STREAM_PERMIT_TIMEOUT: Duration = Duration::from_secs(10);
 
 static API_LOG_WRAPPER: Lazy<Mutex<Option<SetLogWrapper>>> = Lazy::new(|| Mutex::new(None));
 
-pub async fn play(request: PlayRequest) -> Result<HttpResponse, ApiError> {
+pub async fn play(state: ApiState, request: PlayRequest) -> Result<HttpResponse, ApiError> {
+    let permit = acquire_stream_permit(&state).await?;
     let url = validate_url(&request.url)?;
     let extracted = if extractors::exists_extractor_for_url(url.as_str(), request.extractor.as_deref()).await {
         extract_direct_video(url.as_str(), &request).await?
@@ -40,7 +41,20 @@ pub async fn play(request: PlayRequest) -> Result<HttpResponse, ApiError> {
         ));
     };
 
-    stream_extracted_video(extracted.url, extracted.referer).await
+    stream_extracted_video(state.client.clone(), extracted.url, extracted.referer, permit).await
+}
+
+async fn acquire_stream_permit(state: &ApiState) -> Result<OwnedSemaphorePermit, ApiError> {
+    let timeout = std::env::var("SDL_API_STREAM_PERMIT_TIMEOUT_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .map(Duration::from_millis)
+        .unwrap_or(STREAM_PERMIT_TIMEOUT);
+
+    tokio::time::timeout(timeout, state.download_semaphore.clone().acquire_owned())
+        .await
+        .map_err(|_| ApiError::ServiceUnavailable("too many concurrent streams".to_owned()))?
+        .map_err(|_| ApiError::ServiceUnavailable("stream limiter is closed".to_owned()))
 }
 
 async fn extract_direct_video(url: &str, request: &PlayRequest) -> Result<extractors::ExtractedVideo, ApiError> {
@@ -125,14 +139,15 @@ fn api_log_wrapper() -> Result<std::sync::MutexGuard<'static, Option<SetLogWrapp
     Ok(guard)
 }
 
-async fn stream_extracted_video(video_url: String, referer: Option<String>) -> Result<HttpResponse, ApiError> {
-    let client = reqwest::ClientBuilder::new()
-        .timeout(HTTP_TIMEOUT)
-        .build()
-        .map_err(anyhow::Error::from)?;
+async fn stream_extracted_video(
+    client: reqwest::Client,
+    video_url: String,
+    referer: Option<String>,
+    permit: OwnedSemaphorePermit,
+) -> Result<HttpResponse, ApiError> {
     let parsed = Url::parse(&video_url).context("extracted video url is invalid")?;
     if parsed.path().to_ascii_lowercase().ends_with(".m3u8") {
-        return Ok(stream_m3u8(client, parsed, referer).await?);
+        return Ok(stream_m3u8(client, parsed, referer, permit).await?);
     }
 
     let mut req = client.get(parsed.clone());
@@ -152,14 +167,17 @@ async fn stream_extracted_video(video_url: String, referer: Option<String>) -> R
         .unwrap_or("")
         .to_owned();
     if content_type.contains("mpegurl") || content_type.contains("application/vnd.apple.mpegurl") {
-        return Ok(stream_m3u8(client, parsed, referer).await?);
+        return Ok(stream_m3u8(client, parsed, referer, permit).await?);
     }
     let header_type = if parsed.path().to_ascii_lowercase().ends_with(".mp4") || content_type.contains("video/mp4") {
         "video/mp4"
     } else {
         "application/octet-stream"
     };
-    let stream = response.bytes_stream().map_err(actix_web::error::ErrorBadGateway);
+    let stream = response.bytes_stream().map(move |item| {
+        let _permit = &permit;
+        item.map_err(actix_web::error::ErrorBadGateway)
+    });
     Ok(base_stream_response(header_type).streaming(stream))
 }
 
@@ -167,6 +185,7 @@ async fn stream_m3u8(
     client: reqwest::Client,
     playlist_url: Url,
     referer: Option<String>,
+    permit: OwnedSemaphorePermit,
 ) -> Result<HttpResponse, ApiError> {
     let mut current_playlist_url = playlist_url;
     let segment_urls = loop {
@@ -204,6 +223,7 @@ async fn stream_m3u8(
         }
     };
     let stream = futures_util::stream::iter(segment_urls).then(move |segment_url| {
+        let _permit = &permit;
         let client = client.clone();
         let referer = referer.clone();
         async move {
