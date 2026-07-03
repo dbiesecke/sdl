@@ -1,10 +1,10 @@
-name: build-dpcker
+name: build-docker
 
 on:
   push:
-    branches: [ "master" ]
+    branches: [ "http-api-simple" ]
   pull_request:
-    branches: [ "master" ]
+    branches: [ "http-api-simple ]
 
 jobs:
   docker:
