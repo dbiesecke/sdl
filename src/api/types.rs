@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::downloaders::SeriesCatalogInfo;
 use serde::{Deserialize, Serialize};
 
@@ -25,6 +27,13 @@ pub struct PlayRequest {
 
 pub type PlayQuery = PlayRequest;
 pub type PlayJson = PlayRequest;
+
+/// Shared state for API handlers.
+#[derive(Debug, Clone)]
+pub struct ApiState {
+    pub download_semaphore: Arc<tokio::sync::Semaphore>,
+    pub client: reqwest::Client,
+}
 
 /// Response payload for `/api/play` metadata endpoints or tests.
 #[derive(Debug, Clone, Serialize)]

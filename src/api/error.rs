@@ -5,6 +5,7 @@ use serde::Serialize;
 pub enum ApiError {
     BadRequest(String),
     NotFound(String),
+    ServiceUnavailable(String),
     Internal(anyhow::Error),
 }
 
@@ -16,7 +17,9 @@ struct ErrorBody<'a> {
 impl std::fmt::Display for ApiError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::BadRequest(message) | Self::NotFound(message) => f.write_str(message),
+            Self::BadRequest(message) | Self::NotFound(message) | Self::ServiceUnavailable(message) => {
+                f.write_str(message)
+            }
             Self::Internal(err) => write!(f, "{err:#}"),
         }
     }
@@ -27,6 +30,7 @@ impl ResponseError for ApiError {
         match self {
             Self::BadRequest(_) => StatusCode::BAD_REQUEST,
             Self::NotFound(_) => StatusCode::NOT_FOUND,
+            Self::ServiceUnavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
             Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
