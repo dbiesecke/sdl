@@ -1,7 +1,7 @@
 [package]
 name = "sdl"
 version = "0.3.1-api"
-edition = "2026"
+edition = "2021"
 rust-version = "1.96"
 readme = "README.md"
 repository = "https://github.com/Funami580/sdl"
