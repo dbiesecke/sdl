@@ -26,7 +26,7 @@ RUN git init . && \
     git checkout FETCH_HEAD
 
 # Compile only the sdl-api binary.
-RUN cargo build --release --locked --bin sdl-api
+RUN cargo build --release --bin sdl-api
 
 
 ### Stage 2: Runtime image
