@@ -4,7 +4,7 @@ on:
   push:
     branches: [ "http-api-simple" ]
   pull_request:
-    branches: [ "http-api-simple ]
+    branches: [ "http-api-simple" ]
 
 jobs:
   docker:
