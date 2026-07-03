@@ -22,6 +22,11 @@ static URL_REGEX: Lazy<Regex> = Lazy::new(|| {
         .unwrap()
 });
 
+/// Downloader for AniWorld/SerienStream pages.
+///
+/// This downloader requires a `thirtyfour::WebDriver` because the supported
+/// pages expose the relevant series and stream contents through a real
+/// browser/Selenium session.
 pub struct AniWorldSerienStream<'driver> {
     driver: &'driver WebDriver,
     parsed_url: ParsedUrl,
