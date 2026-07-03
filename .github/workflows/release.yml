@@ -60,7 +60,7 @@ jobs:
 
       - name: Build, get version
         run: |
-          cargo run --release --bin sdl-api -- --help
+          cargo build --release --bin sdl-api
           echo "SDL_VERSION=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages | .[0].version')" ${{ matrix.env-command }}
 
       - name: Archive (Windows)
