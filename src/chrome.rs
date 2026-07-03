@@ -17,7 +17,7 @@ const UBLOCK_GITHUB_API_URL: &str = "https://api.github.com/repos/gorhill/uBlock
 
 pub(crate) struct ChromeDriver<'a> {
     data_dir: &'a Path,
-    downloader: &'a Downloader,
+    downloader: Option<&'a Downloader>,
 }
 
 impl<'a> ChromeDriver<'a> {
@@ -26,7 +26,21 @@ impl<'a> ChromeDriver<'a> {
         downloader: &'a Downloader,
         headless: bool,
     ) -> Result<(thirtyfour::WebDriver, Child), anyhow::Error> {
-        let chrome_driver = ChromeDriver { data_dir, downloader };
+        let chrome_driver = ChromeDriver {
+            data_dir,
+            downloader: Some(downloader),
+        };
+        chrome_driver.chrome_driver(headless).await
+    }
+
+    pub(crate) async fn get_without_ublock(
+        data_dir: &'a Path,
+        headless: bool,
+    ) -> Result<(thirtyfour::WebDriver, Child), anyhow::Error> {
+        let chrome_driver = ChromeDriver {
+            data_dir,
+            downloader: None,
+        };
         chrome_driver.chrome_driver(headless).await
     }
 
@@ -72,22 +86,24 @@ impl<'a> ChromeDriver<'a> {
         }
         caps.add_exclude_switch("enable-automation").unwrap();
 
-        // Add uBlock Origin extension, if possible
-        let ublock_dir = self.data_dir.join("uBlock");
+        // Add uBlock Origin extension, if an asset downloader is available.
+        if self.downloader.is_some() {
+            let ublock_dir = self.data_dir.join("uBlock");
 
-        if let Err(err) = self.prepare_ublock(&ublock_dir).await {
-            log::warn!("Failed to prepare uBlock Origin: {:#}", err);
-        }
-
-        match Self::get_ublock_directory(&ublock_dir).await {
-            Ok(ublock_dir) => {
-                if let Some(ublock_dir) = ublock_dir.to_str() {
-                    caps.add_arg(&format!("--load-extension={ublock_dir}")).unwrap();
-                } else {
-                    log::warn!("Failed to add uBlock Origin as extension: path to directory is not valid UTF-8");
-                }
+            if let Err(err) = self.prepare_ublock(&ublock_dir).await {
+                log::warn!("Failed to prepare uBlock Origin: {:#}", err);
             }
-            Err(err) => log::warn!("Failed to add uBlock Origin as extension: {:#}", err),
+
+            match Self::get_ublock_directory(&ublock_dir).await {
+                Ok(ublock_dir) => {
+                    if let Some(ublock_dir) = ublock_dir.to_str() {
+                        caps.add_arg(&format!("--load-extension={ublock_dir}")).unwrap();
+                    } else {
+                        log::warn!("Failed to add uBlock Origin as extension: path to directory is not valid UTF-8");
+                    }
+                }
+                Err(err) => log::warn!("Failed to add uBlock Origin as extension: {:#}", err),
+            }
         }
 
         // Initialize ChromeDriver (try for 5 seconds)
@@ -260,6 +276,7 @@ impl<'a> ChromeDriver<'a> {
                 anyhow::bail!(UNEXPECT_JSON_ERR_MSG)
             };
             self.downloader
+                .expect("prepare_ublock requires a downloader")
                 .download_to_file(
                     InternalDownloadTask::new(ublock_download_file_path.clone(), download_url.to_owned())
                         .overwrite_file(true)
