@@ -2,9 +2,7 @@ name: build-docker
 
 on:
   push:
-    branches: [ "http-api-simple" ]
-  pull_request:
-    branches: [ "http-api-simple" ]
+    branches: [ "main" ]
 
 jobs:
   docker:
