@@ -1,5 +1,6 @@
 #![allow(warnings, unused)]
 
+pub mod api;
 pub(crate) mod download;
 pub mod downloaders;
 pub mod extractors;
